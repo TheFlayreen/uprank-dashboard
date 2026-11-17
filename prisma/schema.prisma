@@ -1,0 +1,151 @@
+// Raw-but-typed copies of the two source systems.
+// There is deliberately NO foreign key between product clients and billing
+// customers: the link (clients.stripe_customer_id) is broken for some rows,
+// and we want to keep those rows and report them rather than drop them.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model SyncRun {
+  id            Int       @id @default(autoincrement())
+  startedAt     DateTime  @default(now()) @map("started_at")
+  finishedAt    DateTime? @map("finished_at")
+  status        String // running | success | failed
+  source        String // api | snapshot
+  referenceDate DateTime? @map("reference_date") // from X-Mock-Reference-Date
+  counts        Json?
+  error         String?
+
+  @@map("sync_runs")
+}
+
+// ---------- Billing (Stripe-style) ----------
+
+model Customer {
+  id         String   @id
+  name       String
+  email      String
+  created    DateTime
+  delinquent Boolean
+
+  subscriptions Subscription[]
+  invoices      Invoice[]
+
+  @@map("billing_customers")
+}
+
+model Subscription {
+  id             String    @id
+  customerId     String    @map("customer_id")
+  status         String // active | past_due | canceled
+  created        DateTime
+  startDate      DateTime  @map("start_date")
+  canceledAt     DateTime? @map("canceled_at")
+  endedAt        DateTime? @map("ended_at")
+  cancelReason   String?   @map("cancel_reason") // cancellation_requested | payment_failed
+  cancelFeedback String?   @map("cancel_feedback")
+  cancelComment  String?   @map("cancel_comment")
+
+  customer Customer           @relation(fields: [customerId], references: [id])
+  items    SubscriptionItem[]
+  invoices Invoice[]
+
+  @@index([customerId])
+  @@map("billing_subscriptions")
+}
+
+model SubscriptionItem {
+  id             String   @id
+  subscriptionId String   @map("subscription_id")
+  priceId        String   @map("price_id")
+  priceNickname  String?  @map("price_nickname")
+  productId      String   @map("product_id")
+  unitAmount     Int      @map("unit_amount") // cents
+  quantity       Int
+  interval       String
+  intervalCount  Int      @map("interval_count")
+  created        DateTime
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id])
+
+  @@index([subscriptionId])
+  @@map("billing_subscription_items")
+}
+
+model Invoice {
+  id                 String    @id
+  customerId         String    @map("customer_id")
+  subscriptionId     String?   @map("subscription_id")
+  status             String // paid | open | uncollectible | void
+  billingReason      String?   @map("billing_reason")
+  amountDue          Int       @map("amount_due") // cents
+  amountPaid         Int       @map("amount_paid") // cents
+  creditNotesAmount  Int       @map("credit_notes_amount") // cents refunded after payment
+  attemptCount       Int       @map("attempt_count")
+  created            DateTime
+  periodStart        DateTime  @map("period_start")
+  periodEnd          DateTime  @map("period_end")
+  paidAt             DateTime? @map("paid_at")
+  nextPaymentAttempt DateTime? @map("next_payment_attempt")
+
+  customer     Customer      @relation(fields: [customerId], references: [id])
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id])
+
+  @@index([customerId])
+  @@map("billing_invoices")
+}
+
+// ---------- Product ----------
+
+model Client {
+  id               String    @id
+  businessName     String    @map("business_name")
+  trade            String?
+  region           String?
+  stripeCustomerId String?   @map("stripe_customer_id")
+  status           String // onboarding | live | cancelled
+  signupAt         DateTime  @map("signup_at")
+  assetsReceivedAt DateTime? @map("assets_received_at")
+  siteApprovedAt   DateTime? @map("site_approved_at")
+  liveAt           DateTime? @map("live_at")
+  lastLoginAt      DateTime? @map("last_login_at")
+  adsEnabled       Boolean   @map("ads_enabled")
+  adsMonthlyBudget Int?      @map("ads_monthly_budget") // whole AUD, paid to ad platform
+  adsEnabledAt     DateTime? @map("ads_enabled_at")
+
+  leads   LeadMonth[]
+  tickets SupportTicket[]
+
+  @@index([stripeCustomerId])
+  @@map("product_clients")
+}
+
+model LeadMonth {
+  clientId String @map("client_id")
+  month    String // YYYY-MM
+  leads    Int
+
+  client Client @relation(fields: [clientId], references: [id])
+
+  @@id([clientId, month])
+  @@map("product_lead_months")
+}
+
+model SupportTicket {
+  id        String   @id
+  clientId  String   @map("client_id")
+  createdAt DateTime @map("created_at")
+  category  String
+  status    String
+
+  client Client @relation(fields: [clientId], references: [id])
+
+  @@index([clientId])
+  @@map("product_support_tickets")
+}
